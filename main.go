@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"os"
 	"bufio"
-	"strings"
 )
 
 var (
@@ -74,10 +73,9 @@ func main() {
 	fmt.Println("Launching server on port", port, "...")
 	go serve()
 	for {
-		reader := bufio.NewReader(os.Stdin)
 		fmt.Print("Enter ip address: ")
-		strIP, _ := reader.ReadString('\n')
-		strIP = strings.Trim(strIP, " \n")
+		var strIP string
+		fmt.Scanln(&strIP)
 		if check := net.ParseIP(strIP); check == nil {
 			fmt.Println("Wrong IP address")
 			continue
