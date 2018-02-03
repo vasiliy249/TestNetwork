@@ -1,3 +1,3 @@
 # TestNetwork
 
-simple ping-pong over tcp
+simple client-server app over tcp and udp (ping/pong + file transfering)
