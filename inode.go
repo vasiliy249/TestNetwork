@@ -15,5 +15,9 @@ type Node interface {
 }
 
 func NewNode(port int) Node {
-	return &nodeImpl{port: port, tcpRunning: false, udpRunning: false}
+	return &nodeImpl {
+		port: port,
+		stopTcp: make(chan struct{}),
+		stopUdp: make(chan struct{}),
+	}
 }

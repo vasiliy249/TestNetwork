@@ -9,6 +9,7 @@ import (
 	"io"
 	"bufio"
 	"path/filepath"
+	"time"
 )
 
 func (srv *nodeImpl) SendFile(addr, filename string) OpResult {
@@ -42,20 +43,21 @@ func (srv *nodeImpl) SendFile(addr, filename string) OpResult {
 	binary.BigEndian.PutUint64(fileSizeSlice, uint64(fileSize))
 	conn.Write(fileSizeSlice)
 	conn.Write([]byte(fileName + "\n"))
+
+	time.Sleep(time.Second * 20)
 	written, err := io.Copy(conn, fileReader)
 	if err != nil {
 		fmt.Println("Error sending file")
 		return OR_Fail
 	}
-	if written != fileSize {
-		fmt.Println("Not all bytes were sent")
+	reply, err := bufio.NewReader(conn).ReadString('\n')
+	if written != fileSize && err == nil {
+		fmt.Println("Not all bytes were sent. Reply: " + reply)
 		return OR_Fail
 	}
 
-	// check reply
-	reply, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
-		fmt.Println("Error during read from ", addr)
+		fmt.Println("File was sent, but error reading reply from ", addr)
 		return OR_Fail
 	}
 	fmt.Println("File was sent to the server. Reply: " + reply)

@@ -9,84 +9,94 @@ import (
 	"encoding/binary"
 	"io"
 	"time"
+	"strings"
 )
 
 const (
-	MAX_TCP_CONNECTIONS = 64
+	MAX_TCP_CONNECTIONS = 2
 )
 
 type nodeImpl struct {
-	port       int
+	port        int
 
-	tcpRunning bool
-	udpRunning bool
+	tcpListener *net.TCPListener
+	udpConn     *net.UDPConn
 
-	stopTcp    chan struct{}
-	stopUdp    chan struct{}
-
-	tcpStopped chan struct{}
-	udpStopped chan struct{}
+	stopTcp     chan struct{}
+	stopUdp     chan struct{}
 
 	tcpHandling [MAX_TCP_CONNECTIONS]chan struct{}
 }
 
 func (srv *nodeImpl) StartServe() OpResult {
+	fmt.Println("Launching the servers...")
+	resTcp := srv.startServeTcp()
+	resUdp := srv.startServerUdp()
+
+	if resTcp == OR_Success {
+		return resUdp
+	} else {
+		return OR_Fail
+	}
+}
+
+func (srv *nodeImpl) startServeTcp() OpResult {
+	if srv.tcpListener != nil {
+		fmt.Println("TCP server is already started")
+		return OR_Fail
+	}
+
+	select {
+	case <-srv.stopTcp:
+		srv.stopTcp = make(chan struct{})
+	default:
+	}
+
 	tcpAddr, err := net.ResolveTCPAddr("tcp", ":" + strconv.Itoa(srv.port))
 	if err != nil {
 		fmt.Println("Error resolving TCP address: ", err.Error())
 		return OR_Fail
 	}
-	tcpListener, err := net.ListenTCP("tcp", tcpAddr)
+	srv.tcpListener, err = net.ListenTCP("tcp", tcpAddr)
 	if err != nil {
 		fmt.Println("Error openning listen port:", err.Error())
 		return OR_Fail
 	}
-	go srv.serveTcp(tcpListener)
-	srv.tcpRunning = true
-
-	udpAddr, err := net.ResolveUDPAddr("udp", ":" + strconv.Itoa(srv.port))
-	if err != nil {
-		fmt.Println("Error resolving UDP address: ", err.Error())
-		return OR_Fail
-	}
-	udpConn, err := net.ListenUDP("udp", udpAddr)
-	if err != nil {
-		fmt.Println("Error during open listen port:", err.Error())
-	}
-	go srv.serveUdp(udpConn)
-	srv.udpRunning = true
-
+	go srv.serveTcp()
+	fmt.Println("TCP server is started")
 	return OR_Success
 }
 
-func (srv *nodeImpl) serveTcp(listener net.Listener) {
-	defer listener.Close()
-
+func (srv *nodeImpl) serveTcp() {
 	for {
 		select {
 		case <-srv.stopTcp:
-			for i := range srv.tcpHandling {
+			fmt.Println("Stopping tcp server.")
+			for i := 0; i < MAX_TCP_CONNECTIONS; i++ {
 				if srv.tcpHandling[i] != nil {
 					<- srv.tcpHandling[i]
 				}
 			}
-			srv.tcpStopped <- struct{}{}
+			close(srv.stopTcp)
 			return
 		default:
-			connIndex := srv.getFirstFreeTcpHandleIndex()
-			if connIndex == -1 {
-				time.Sleep(time.Second)
-				fmt.Println("The maximum number of simultaneous connections has been reached")
+			conn, err := srv.tcpListener.Accept()
+			if err != nil {
+				if !strings.Contains(err.Error(), "use of closed network connection") {
+					fmt.Println("Error during accepting connection: ", err.Error())
+				}
 				continue
 			}
-			conn, err := listener.Accept()
-			if err != nil {
-				fmt.Println("Error during accepting connection: ", err.Error())
+			connIndex := srv.getFirstFreeTcpHandleIndex()
+			if connIndex == -1 {
+				conn.Write([]byte("Maximum number of connections\n"))
+				conn.Close()
+				fmt.Println("Maximum number of simultaneous connections has been reached")
+				time.Sleep(time.Second)
 				continue
 			}
 
-			handlingChan := make(chan struct{})
-			srv.tcpHandling[connIndex] = handlingChan
+			srv.tcpHandling[connIndex] = make(chan struct{})
 			go srv.handleTcpConn(conn, connIndex)
 		}
 	}
@@ -131,7 +141,7 @@ func (srv *nodeImpl) handleTcpConn(conn net.Conn, index int) {
 		}
 		file, err := os.Create(fullFileName)
 		if err != nil {
-			conn.Write([]byte("Cannot recieve a file\n"))
+			conn.Write([]byte("Cannot receive a file (maybe already exists)\n"))
 			return
 		}
 		defer file.Close()
@@ -147,7 +157,7 @@ func (srv *nodeImpl) handleTcpConn(conn net.Conn, index int) {
 			fmt.Println("Not all bytes were received", written, fileSize)
 			conn.Write([]byte("Not all bytes were received \n"))
 		} else {
-			fmt.Println("The file was received")
+			fmt.Println("Recieved file from ", conn.RemoteAddr())
 			conn.Write([]byte("The file was received \n"))
 		}
 	} else {
@@ -162,42 +172,72 @@ func (srv *nodeImpl) closeTcpConn(conn net.Conn, index int) {
 	srv.tcpHandling[index] = nil
 }
 
-func (srv *nodeImpl) serveUdp(udpConn *net.UDPConn) {
-	defer udpConn.Close()
+func (srv *nodeImpl) startServerUdp() OpResult {
+	if srv.udpConn != nil {
+		fmt.Println("UDP server is already started")
+		return OR_Fail
+	}
 
+	select {
+	case <-srv.stopUdp:
+		srv.stopUdp = make(chan struct{})
+	default:
+	}
+
+	udpAddr, err := net.ResolveUDPAddr("udp", ":" + strconv.Itoa(srv.port))
+	if err != nil {
+		fmt.Println("Error resolving UDP address: ", err.Error())
+		return OR_Fail
+	}
+	srv.udpConn, err = net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		fmt.Println("Error during open listen port:", err.Error())
+	}
+	go srv.serveUdp()
+	fmt.Println("UDP server is started")
+	return OR_Success
+}
+
+func (srv *nodeImpl) serveUdp() {
 	for {
 		select {
 		case <-srv.stopUdp:
 			fmt.Println("Stopping udp server.")
-			srv.udpStopped <- struct{}{}
+			srv.udpConn.Close()
+			close(srv.stopUdp)
 			return
 		default:
-			udpConn.SetDeadline(time.Now().Add(time.Second))
+			srv.udpConn.SetDeadline(time.Now().Add(time.Second))
 			buff := make([]byte, 1024)
-			n, addr, err := udpConn.ReadFromUDP(buff)
+			n, addr, err := srv.udpConn.ReadFromUDP(buff)
 			if err != nil {
 				if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
 					continue
 				}
 				fmt.Println("Error during read from client")
-				return
+				continue
 			}
 			if string(buff[:n]) == "PING\n" {
-				udpConn.WriteToUDP([]byte("PONG\n"), addr)
+				srv.udpConn.WriteToUDP([]byte("PONG\n"), addr)
 			} else {
-				udpConn.WriteToUDP([]byte("Unsupported command\n"), addr)
+				srv.udpConn.WriteToUDP([]byte("Unsupported command\n"), addr)
 			}
 		}
 	}
 }
 
 func (srv *nodeImpl) StopServe() {
-	if srv.tcpRunning {
-		srv.stopTcp <- struct{}{}
-		<-srv.tcpStopped
+	if srv.tcpListener != nil {
+		srv.tcpListener.Close()
+		srv.stopTcp <-struct{}{}
+		<-srv.stopTcp
+		srv.tcpListener = nil
+		fmt.Println("TCP server is stopped")
 	}
-	if srv.udpRunning {
-		srv.stopUdp <- struct{}{}
-		<-srv.udpStopped
+	if srv.udpConn != nil {
+		srv.stopUdp <-struct{}{}
+		<-srv.stopUdp
+		srv.udpConn = nil
+		fmt.Println("UDP server is stopped")
 	}
 }
