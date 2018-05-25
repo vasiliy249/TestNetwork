@@ -4,6 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"bytes"
+
+	bencode "github.com/jackpal/bencode-go"
 )
 
 var (
@@ -15,7 +18,24 @@ func processCmdArgs() {
 	flag.Parse()
 }
 
+type responseType struct {
+	T string "t"
+	Y string "y"
+	Q string "q"
+}
+
 func main() {
+	var b bytes.Buffer
+	from := responseType{T:"t_lol", Y:"y_kek", Q:"q_lel"}
+	if err := bencode.Marshal(&b, from); err != nil {
+		return
+	}
+
+	var into responseType
+	if e2 := bencode.Unmarshal(&b, &into); e2 != nil {
+		return
+	}
+
 	processCmdArgs()
 
 	node := NewNode(port)
